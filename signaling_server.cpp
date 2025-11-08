@@ -5,7 +5,7 @@
 #include <thread>
 #include <set>
 #include <mutex>
-#include <nlohmann/json.hpp> // Для JSON обработки
+#include <nlohmann/json.hpp> 
 
 using tcp = boost::asio::ip::tcp;
 namespace websocket = boost::beast::websocket;
