@@ -52,7 +52,7 @@ void WebSocketSession::on_read(beast::error_code ec, std::size_t bytes_transferr
 void WebSocketSession::send(std::shared_ptr<std::string const> const& ss) {
     write_queue_.push(ss);
 
-  
+
     if (write_queue_.size() > 1)
         return;
 

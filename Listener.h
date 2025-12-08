@@ -8,7 +8,7 @@ namespace beast = boost::beast;
 namespace net = boost::asio;
 using tcp = boost::asio::ip::tcp;
 
-class SharedState; 
+class SharedState;
 
 class Listener : public std::enable_shared_from_this<Listener> {
     net::io_context& ioc_;

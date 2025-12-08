@@ -1,34 +1,109 @@
+п»ї
+#pragma warning(disable: 4146) 
+#pragma warning(disable: 4068)
+
 #include "SharedState.h"
 #include "WebSocketSession.h"
+#include "RTCManager.h"
+#include <nlohmann/json.hpp>
+#include <iostream>
 
-SharedState::SharedState() {}
+using json = nlohmann::json;
+
+SharedState::SharedState() : rtc_manager_(std::make_unique<RTCManager>()) {
+    rtc_manager_->initialize();
+}
+
+SharedState::~SharedState() = default;
 
 void SharedState::join(std::shared_ptr<WebSocketSession> session) {
     std::lock_guard<std::mutex> lock(mutex_);
     sessions_.insert(session);
+
+    std::string client_id = "client_" + std::to_string(reinterpret_cast<uintptr_t>(session.get()));
+    session_to_client_id_[session] = client_id;
+
+    std::cout << "Client joined: " << client_id << " (Total: " << sessions_.size() << ")" << std::endl;
 }
 
 void SharedState::leave(std::shared_ptr<WebSocketSession> session) {
     std::lock_guard<std::mutex> lock(mutex_);
-    sessions_.erase(session);
-}
 
-
-void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> ignore_session) {
-
-    std::vector<std::weak_ptr<WebSocketSession>> v;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        v.reserve(sessions_.size());
-        for (auto const& wp : sessions_)
-            v.push_back(wp);
+    auto it = session_to_client_id_.find(session);
+    if (it != session_to_client_id_.end()) {
+        rtc_manager_->closePeerConnection(it->second);
+        session_to_client_id_.erase(it);
     }
 
-    for (auto const& wp : v) {
-        if (auto sp = wp.lock()) {
-            if (sp != ignore_session) {
-                // Передаем владение сообщением в сессию
-                sp->send(std::make_shared<std::string const>(message));
+    sessions_.erase(session);
+    std::cout << "Client left (Remaining: " << sessions_.size() << ")" << std::endl;
+}
+
+void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> sender_session) {
+    try {
+        auto j = json::parse(message);
+        std::string type = j.value("type", "");
+
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto it = session_to_client_id_.find(sender_session);
+        if (it == session_to_client_id_.end()) {
+            std::cerr << "Session not found in client ID map" << std::endl;
+            return;
+        }
+
+        std::string client_id = it->second;
+
+        if (type == "offer") {
+            std::cout << "Received offer from " << client_id << std::endl;
+
+            rtc_manager_->createPeerConnection(client_id,
+                [this, sender_session](const std::string& msg) {
+                    this->sendToSession(sender_session, msg);
+                });
+
+            std::string sdp = j.value("sdp", "");
+            rtc_manager_->handleOffer(client_id, sdp);
+
+        }
+        else if (type == "answer") {
+            std::cout << "Received answer from " << client_id << std::endl;
+            std::string sdp = j.value("sdp", "");
+            rtc_manager_->handleAnswer(client_id, sdp);
+
+        }
+        else if (type == "ice_candidate") {
+            std::cout << "Received ICE candidate from " << client_id << std::endl;
+            std::string candidate = j.value("candidate", "");
+            std::string sdpMid = j.value("sdpMid", "");
+            int sdpMLineIndex = j.value("sdpMLineIndex", 0);
+            rtc_manager_->handleIceCandidate(client_id, candidate, sdpMid, sdpMLineIndex);
+
+        }
+        else {
+            auto const ss = std::make_shared<std::string const>(std::move(message));
+            for (auto& weak_session : sessions_) {
+                if (auto session = weak_session.lock()) {
+                    if (session != sender_session) {
+                        session->send(ss);
+                    }
+                }
+            }
+        }
+    }
+    catch (const json::parse_error& e) {
+        std::cerr << "JSON parse error: " << e.what() << std::endl;
+    }
+}
+
+void SharedState::sendToSession(std::shared_ptr<WebSocketSession> session, const std::string& message) {
+    auto ss = std::make_shared<std::string const>(message);
+
+    for (auto& weak_session : sessions_) {
+        if (auto s = weak_session.lock()) {
+            if (s == session) {
+                s->send(ss);
+                return;
             }
         }
     }
