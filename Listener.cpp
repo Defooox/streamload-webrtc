@@ -15,7 +15,6 @@ Listener::Listener(
     acceptor_.set_option(net::socket_base::reuse_address(true));
     acceptor_.bind(endpoint);
     acceptor_.listen(net::socket_base::max_listen_connections);
-
 }
 
 void Listener::run() {
@@ -23,7 +22,6 @@ void Listener::run() {
 }
 
 void Listener::fail(beast::error_code ec, char const* what) {
-
     if (ec == net::error::operation_aborted)
         return;
     std::cerr << what << ": " << ec.message() << "\n";
@@ -51,7 +49,6 @@ void Listener::on_accept(beast::error_code ec, tcp::socket socket) {
                 return fail(ec, "read_http");
 
             if (websocket::is_upgrade(*req)) {
-
                 std::make_shared<WebSocketSession>(stream->release_socket(), state_)->run(*req);
             }
         });

@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 #include <map>
+#include <functional>
 
 class WebSocketSession;
 class RTCManager;
@@ -23,5 +24,6 @@ public:
 
     void join(std::shared_ptr<WebSocketSession> session);
     void leave(std::shared_ptr<WebSocketSession> session);
-    void send(std::string message, std::shared_ptr<WebSocketSession> ignore_session);
+    void send(std::string message, std::shared_ptr<WebSocketSession> sender);
+    void startStreamingForSession(std::shared_ptr<WebSocketSession> session, const std::string& file_path);
 };
