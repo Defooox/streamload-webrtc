@@ -50,7 +50,7 @@ private:
     class SetSessionDescriptionObserver;
     class DataChannelObserver;
 
-
+    // Класс для декодирования и стриминга видео из файла
     class FileVideoTrackSource : public webrtc::AdaptedVideoTrackSource {
     public:
         FileVideoTrackSource();
@@ -59,11 +59,14 @@ private:
         void Start();
         void Stop();
 
+        // Получить текущее время воспроизведения
+        double getCurrentTime() const;
+        bool isPlaying() const;
 
+        // Методы VideoTrackSourceInterface
         bool is_screencast() const override { return false; }
         absl::optional<bool> needs_denoising() const override { return false; }
 
-      
         SourceState state() const override {
             return running_ ? kLive : kEnded;
         }
@@ -73,13 +76,15 @@ private:
         }
 
     protected:
-
         ~FileVideoTrackSource() override;
 
     private:
         std::string file_path_;
         std::thread capture_thread_;
         std::atomic<bool> running_{ false };
+        std::atomic<double> current_time_{ 0.0 };
+        std::atomic<bool> is_playing_{ false };
+
         void CaptureLoop();
     };
 
@@ -87,6 +92,8 @@ private:
         webrtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection;
         webrtc::scoped_refptr<webrtc::DataChannelInterface> data_channel;
         webrtc::scoped_refptr<PeerConnectionObserver> observer;
+        webrtc::scoped_refptr<FileVideoTrackSource> video_source;
+        DataChannelObserver* data_channel_observer = nullptr;
         OnMessageCallback callback;
         bool is_streaming = false;
     };

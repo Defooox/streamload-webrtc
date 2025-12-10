@@ -15,13 +15,14 @@ using tcp = net::ip::tcp;
 class HttpServer : public std::enable_shared_from_this<HttpServer> {
     tcp::acceptor acceptor_;
     std::string upload_path_;
-    std::filesystem::path web_root_;
+    std::string web_root_; // Changed to string for easier concatenation
 
     void do_accept();
-    void handle_request(tcp::socket socket, http::request<http::string_body> req);
+    void on_accept(beast::error_code ec, tcp::socket socket);
 
 public:
     HttpServer(net::io_context& ioc, tcp::endpoint endpoint,
         std::string upload_path, std::string web_root = "./web");
+
     void run();
 };

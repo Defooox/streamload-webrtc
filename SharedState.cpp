@@ -1,4 +1,6 @@
-﻿#pragma warning(disable: 4566)
+﻿// SharedState.cpp - с добавленной синхронизацией воспроизведения
+
+#pragma warning(disable: 4566)
 #pragma warning(disable: 4146)
 #pragma warning(disable: 4068)
 
@@ -12,9 +14,18 @@ using json = nlohmann::json;
 
 SharedState::SharedState() : rtc_manager_(std::make_unique<RTCManager>()) {
     rtc_manager_->initialize();
+
+    // Запускаем поток для отправки синхронизации
+    sync_running_ = true;
+    sync_thread_ = std::thread(&SharedState::syncLoop, this);
 }
 
-SharedState::~SharedState() = default;
+SharedState::~SharedState() {
+    sync_running_ = false;
+    if (sync_thread_.joinable()) {
+        sync_thread_.join();
+    }
+}
 
 void SharedState::join(std::shared_ptr<WebSocketSession> session) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -54,7 +65,6 @@ void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> se
 
         std::string client_id = it->second;
 
-
         if (type == "start_stream") {
             std::string file_path = j.value("file_path", "");
             std::cout << "[CMD] Start stream command from " << client_id << ": " << file_path << std::endl;
@@ -71,7 +81,6 @@ void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> se
             rtc_manager_->startStreaming(client_id, config);
             return;
         }
-
 
         if (type == "stop_stream") {
             std::cout << "[CMD] Stop stream command from " << client_id << std::endl;
@@ -96,7 +105,12 @@ void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> se
             int sdpMLineIndex = j.value("sdpMLineIndex", 0);
             rtc_manager_->handleIceCandidate(client_id, candidate, sdpMid, sdpMLineIndex);
         }
+        else if (type == "sync_request") {
+            // Клиент запрашивает текущее состояние синхронизации
+            std::cout << "[SYNC] Sync request from " << client_id << std::endl;
+        }
         else {
+            // Ретрансляция другим клиентам
             auto const ss = std::make_shared<std::string const>(std::move(message));
             for (auto& weak_session : sessions_) {
                 if (auto session = weak_session.lock()) {
@@ -123,4 +137,21 @@ void SharedState::sendToSession(std::shared_ptr<WebSocketSession> session, const
             }
         }
     }
+}
+
+void SharedState::syncLoop() {
+    std::cout << "[SYNC] Sync loop started" << std::endl;
+
+    while (sync_running_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Синхронизация каждые 100ms
+
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // Отправляем состояние воспроизведения каждому подключенному клиенту
+        for (const auto& [session, client_id] : session_to_client_id_) {
+            rtc_manager_->sendPlaybackPosition(client_id, 0.0, true);
+        }
+    }
+
+    std::cout << "[SYNC] Sync loop stopped" << std::endl;
 }
