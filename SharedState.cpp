@@ -82,6 +82,16 @@ void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> se
             return;
         }
 
+        if (type == "play" || type == "pause" || type == "seek") {
+          
+            auto const ss = std::make_shared<std::string const>(std::move(message));
+            for (auto& weak_session : sessions_) {
+                if (auto session = weak_session.lock()) {
+                    session->send(ss);
+                }
+            }
+        }
+
         if (type == "stop_stream") {
             std::cout << "[CMD] Stop stream command from " << client_id << std::endl;
             rtc_manager_->stopStreaming(client_id);
