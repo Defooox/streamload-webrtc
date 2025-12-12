@@ -18,12 +18,12 @@ class SharedState {
     std::map<std::shared_ptr<WebSocketSession>, std::string> session_to_client_id_;
     std::unique_ptr<RTCManager> rtc_manager_;
 
-    // Поток для синхронизации
+
     std::thread sync_thread_;
     std::atomic<bool> sync_running_{ false };
 
     void sendToSession(std::shared_ptr<WebSocketSession> session, const std::string& message);
-    void syncLoop(); // Цикл отправки синхронизации
+    void syncLoop(); 
 
 public:
     SharedState();

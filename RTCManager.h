@@ -50,7 +50,6 @@ private:
     class SetSessionDescriptionObserver;
     class DataChannelObserver;
 
-    // Класс для декодирования и стриминга видео из файла
     class FileVideoTrackSource : public webrtc::AdaptedVideoTrackSource {
     public:
         FileVideoTrackSource();
@@ -59,11 +58,10 @@ private:
         void Start();
         void Stop();
 
-        // Получить текущее время воспроизведения
+
         double getCurrentTime() const;
         bool isPlaying() const;
 
-        // Методы VideoTrackSourceInterface
         bool is_screencast() const override { return false; }
         absl::optional<bool> needs_denoising() const override { return false; }
 

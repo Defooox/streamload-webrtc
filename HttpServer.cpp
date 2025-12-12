@@ -1,4 +1,4 @@
-﻿// HttpServer.cpp - Fixed for large file uploads
+﻿
 #include "HttpServer.h"
 #include <boost/beast/version.hpp>
 #include <boost/asio/dispatch.hpp>
@@ -37,11 +37,11 @@ public:
     }
 
     void do_read() {
-        // Create new parser with increased body limit
+      
         parser_ = std::make_unique<http::request_parser<http::string_body>>();
-        parser_->body_limit(500 * 1024 * 1024); // 500MB limit
+        parser_->body_limit(500 * 1024 * 1024); 
 
-        stream_.expires_after(std::chrono::seconds(300)); // 5 minutes for large files
+        stream_.expires_after(std::chrono::seconds(300)); 
         buffer_.clear();
 
         http::async_read(stream_, buffer_, *parser_,
@@ -61,9 +61,9 @@ public:
             return fail(ec, "read");
         }
 
-        // Extract request from parser
+       
         req_ = parser_->release();
-        parser_.reset(); // Free parser memory
+        parser_.reset(); 
 
         handle_request();
     }
@@ -81,7 +81,7 @@ public:
             return res;
             };
 
-        // Handle CORS preflight
+    
         if (req_.method() == http::verb::options) {
             auto res = std::make_shared<http::response<http::string_body>>(
                 http::status::ok, req_.version());
@@ -94,7 +94,7 @@ public:
             return send_response(res);
         }
 
-        // Serve index.html
+
         if (req_.method() == http::verb::get &&
             (req_.target() == "/" || req_.target() == "/index.html")) {
             std::string path = web_root_ + "/index.html";
@@ -117,7 +117,6 @@ public:
             return send_response(res);
         }
 
-        // Serve client.js
         if (req_.method() == http::verb::get && req_.target() == "/client.js") {
             std::string path = web_root_ + "/client.js";
             std::ifstream file(path, std::ios::binary);
@@ -139,7 +138,7 @@ public:
             return send_response(res);
         }
 
-        // Handle file upload
+ 
         if (req_.method() == http::verb::post && req_.target() == "/upload") {
             std::cout << "[HTTP] ========== UPLOAD REQUEST ==========" << std::endl;
             std::cout << "[HTTP] Content-Length: " << req_[http::field::content_length] << std::endl;
@@ -154,7 +153,7 @@ public:
             std::string body = req_.body();
             std::string content_type = std::string(req_[http::field::content_type]);
 
-            // Extract boundary from Content-Type
+           
             std::string boundary;
             size_t boundary_pos = content_type.find("boundary=");
             if (boundary_pos != std::string::npos) {
@@ -163,22 +162,22 @@ public:
                 std::cout << "[HTTP] Boundary: " << boundary << std::endl;
             }
 
-            // Parse multipart data
+   
             size_t data_start = 0;
             size_t data_end = body.size();
 
             if (!boundary.empty()) {
-                // Find first boundary
+     
                 size_t first_boundary = body.find(boundary);
                 if (first_boundary != std::string::npos) {
-                    // Find the end of headers (double CRLF)
+        
                     size_t header_end = body.find("\r\n\r\n", first_boundary);
                     if (header_end != std::string::npos) {
                         data_start = header_end + 4;
                     }
                 }
 
-                // Find closing boundary
+             
                 std::string closing_boundary = boundary + "--";
                 size_t last_boundary = body.rfind(closing_boundary);
                 if (last_boundary != std::string::npos && last_boundary > data_start) {
@@ -201,13 +200,11 @@ public:
                 return send_response(bad_request("Invalid file size"));
             }
 
-            // Generate filename
             std::string filename = "stream_" + std::to_string(std::time(nullptr)) + ".mp4";
             std::string full_path = upload_path_ + "/" + filename;
 
             std::cout << "[HTTP] Saving to: " << full_path << std::endl;
 
-            // Write file
             std::ofstream file(full_path, std::ios::binary);
             if (!file) {
                 std::cerr << "[HTTP] ERROR: Cannot create file: " << full_path << std::endl;
@@ -227,7 +224,7 @@ public:
                 << " (" << data_length << " bytes)" << std::endl;
             std::cout << "[HTTP] ======================================" << std::endl;
 
-            // Send success response
+       
             json response_json;
             response_json["status"] = "ok";
             response_json["file_path"] = full_path;
@@ -287,7 +284,6 @@ public:
     }
 };
 
-// HttpServer implementation
 HttpServer::HttpServer(net::io_context& ioc, tcp::endpoint endpoint,
     std::string upload_path, std::string web_root)
     : acceptor_(net::make_strand(ioc))

@@ -1,6 +1,4 @@
-﻿// WebRTC Streaming Client
-
-class WebRTCClient {
+﻿class WebRTCClient {
     constructor() {
         this.ws = null;
         this.pc = null;
@@ -22,42 +20,39 @@ class WebRTCClient {
     }
 
     setupElements() {
-        // Status elements
         this.statusEl = document.getElementById('connectionStatus');
         this.viewerCountEl = document.getElementById('viewerCount');
         this.syncIndicatorEl = document.getElementById('syncIndicator');
 
-        // Video elements
         this.videoPlayer = document.getElementById('videoPlayer');
         this.videoPlaceholder = document.getElementById('videoPlaceholder');
 
-        // Control buttons
+  
         this.playBtn = document.getElementById('playBtn');
         this.pauseBtn = document.getElementById('pauseBtn');
         this.stopBtn = document.getElementById('stopBtn');
 
-        // Upload elements
+
         this.uploadArea = document.getElementById('uploadArea');
         this.fileInput = document.getElementById('fileInput');
         this.fileList = document.getElementById('fileList');
         this.uploadProgress = document.getElementById('uploadProgress');
         this.uploadProgressFill = document.getElementById('uploadProgressFill');
 
-        // Progress bar
+
         this.progressBar = document.getElementById('progressBar');
         this.progressFill = document.getElementById('progressFill');
         this.timeDisplay = document.getElementById('timeDisplay');
 
-        // Log
+   
         this.logContainer = document.getElementById('logContainer');
     }
 
     setupEventListeners() {
-        // Upload handlers
         this.uploadArea.addEventListener('click', () => this.fileInput.click());
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
 
-        // Drag and drop
+ 
         this.uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             this.uploadArea.classList.add('dragover');
@@ -75,15 +70,14 @@ class WebRTCClient {
             }
         });
 
-        // Control buttons
+
         this.playBtn.addEventListener('click', () => this.play());
         this.pauseBtn.addEventListener('click', () => this.pause());
         this.stopBtn.addEventListener('click', () => this.stop());
 
-        // Progress bar seeking
+
         this.progressBar.addEventListener('click', (e) => this.seek(e));
 
-        // Video events
         this.videoPlayer.addEventListener('timeupdate', () => this.onVideoTimeUpdate());
         this.videoPlayer.addEventListener('play', () => this.onVideoPlay());
         this.videoPlayer.addEventListener('pause', () => this.onVideoPause());
@@ -94,10 +88,24 @@ class WebRTCClient {
         this.log('Connecting to signaling server...', 'info');
         this.updateStatus('connecting');
 
-        this.ws = new WebSocket('ws://localhost:8080');
+        const host = location.hostname;
+        const protocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+        const wsURL = protocol + host + ':8080';
+
+        this.log(`Attempting connection to: ${wsURL}`, 'info');
+
+        try {
+            this.ws = new WebSocket(wsURL);
+        } catch (e) {
+            this.log(`Failed to create WebSocket: ${e.message}`, 'error');
+            this.updateStatus('disconnected');
+            setTimeout(() => this.connectWebSocket(), 5000);
+            return;
+        }
+
 
         this.ws.onopen = () => {
-            this.log('WebSocket connected', 'success');
+            this.log('WebSocket connected successfully', 'success');
             this.isConnected = true;
             this.updateStatus('connected');
         };
@@ -107,15 +115,18 @@ class WebRTCClient {
         };
 
         this.ws.onerror = (error) => {
-            this.log('WebSocket error: ' + error, 'error');
+
+            this.log('WebSocket connection error (check port 8080 and firewall)', 'error');
         };
 
-        this.ws.onclose = () => {
-            this.log('WebSocket disconnected', 'warning');
+        this.ws.onclose = (event) => {
+    
+            let reason = (event.code === 1006) ? "Connection failed (Firewall/Port 8080 blocked?)" : "Disconnected";
+            this.log(`WebSocket closed: ${reason}`, 'warning');
             this.isConnected = false;
             this.updateStatus('disconnected');
 
-            // Reconnect after 3 seconds
+    
             setTimeout(() => this.connectWebSocket(), 3000);
         };
     }
@@ -158,7 +169,7 @@ class WebRTCClient {
         this.pc = new RTCPeerConnection(config);
         this.log('PeerConnection created', 'info');
 
-        // ICE candidate handler
+   
         this.pc.onicecandidate = (event) => {
             if (event.candidate) {
                 this.sendSignaling({
@@ -171,7 +182,7 @@ class WebRTCClient {
             }
         };
 
-        // Connection state handler
+
         this.pc.onconnectionstatechange = () => {
             this.log('Connection state: ' + this.pc.connectionState, 'info');
 
@@ -183,16 +194,20 @@ class WebRTCClient {
             }
         };
 
-        // Track handler (receive video)
+
         this.pc.ontrack = (event) => {
             this.log('Received video track', 'success');
             this.videoPlayer.srcObject = event.streams[0];
             this.videoPlayer.style.display = 'block';
             this.videoPlaceholder.style.display = 'none';
             this.enableControls();
+
+      
+            this.videoPlayer.play().catch(e => {
+                this.log(`Autoplay blocked: ${e.name}. Please click the Play button.`, 'warning');
+            });
         };
 
-        // Data channel handler
         this.pc.ondatachannel = (event) => {
             this.dataChannel = event.channel;
             this.setupDataChannel();
@@ -265,18 +280,16 @@ class WebRTCClient {
     }
 
     handleSync(message) {
-        // Server is sending sync data
         if (!this.syncEnabled || this.localTimeUpdate) return;
 
         const { currentTime, isPlaying } = message;
 
-        // Apply sync if difference is significant (>1 second)
+
         if (Math.abs(this.videoPlayer.currentTime - currentTime) > 1.0) {
             this.log(`Syncing time: ${currentTime.toFixed(2)}s`, 'info');
             this.videoPlayer.currentTime = currentTime;
         }
 
-        // Sync play state
         if (isPlaying && this.videoPlayer.paused) {
             this.videoPlayer.play().catch(e => this.log('Play error: ' + e, 'error'));
         } else if (!isPlaying && !this.videoPlayer.paused) {
@@ -285,7 +298,6 @@ class WebRTCClient {
     }
 
     applySyncData(message) {
-        // Apply sync from DataChannel
         this.handleSync(message);
     }
 
@@ -373,7 +385,7 @@ class WebRTCClient {
             };
 
             xhr.open('POST', 'http://localhost:8081/upload');
-            xhr.timeout = 120000; // 2 minutes timeout
+            xhr.timeout = 120000; 
             xhr.send(formData);
 
         } catch (error) {
@@ -396,13 +408,13 @@ class WebRTCClient {
             </div>
         `).join('');
 
-        // Add click handlers
+ 
         this.fileList.querySelectorAll('.file-item').forEach(item => {
             item.addEventListener('click', () => {
                 const path = item.getAttribute('data-path');
                 this.selectVideo(path);
 
-                // Update active state
+ 
                 this.fileList.querySelectorAll('.file-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
             });
@@ -413,22 +425,21 @@ class WebRTCClient {
         this.log(`Starting stream: ${filePath}`, 'info');
         this.currentFilePath = filePath;
 
-        // Create peer connection if not exists
         if (!this.pc) {
             this.createPeerConnection();
         }
 
-        // Create offer
+        this.pc.addTransceiver('video', { direction: 'recvonly' });
+
+    
         const offer = await this.pc.createOffer();
         await this.pc.setLocalDescription(offer);
 
-        // Send start stream command with offer
         this.sendSignaling({
             type: 'start_stream',
             file_path: filePath
         });
 
-        // Send offer
         this.sendSignaling({
             type: 'offer',
             sdp: offer.sdp
@@ -461,12 +472,12 @@ class WebRTCClient {
         this.videoPlayer.currentTime = 0;
         this.log('Stopped', 'info');
 
-        // Send stop command
+    
         this.sendSignaling({
             type: 'stop_stream'
         });
 
-        // Close peer connection
+     
         if (this.pc) {
             this.pc.close();
             this.pc = null;
@@ -544,7 +555,7 @@ class WebRTCClient {
         this.logContainer.appendChild(entry);
         this.logContainer.scrollTop = this.logContainer.scrollHeight;
 
-        // Keep only last 100 entries
+
         while (this.logContainer.children.length > 100) {
             this.logContainer.removeChild(this.logContainer.firstChild);
         }
@@ -564,7 +575,7 @@ class WebRTCClient {
     }
 }
 
-// Initialize client when page loads
+
 window.addEventListener('DOMContentLoaded', () => {
     new WebRTCClient();
 });

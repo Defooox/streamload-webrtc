@@ -1,5 +1,4 @@
-﻿// RTCManager.cpp - Исправленная версия с реальным декодированием видео
-
+﻿
 #pragma warning(disable: 4146)
 #pragma warning(disable: 4068)
 #pragma warning(disable: 4566)
@@ -20,17 +19,18 @@
 #include <rtc_base/time_utils.h>
 #include <media/base/adapted_video_track_source.h>
 
-// FFmpeg headers
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
+#include <libavutil/error.h>
 }
 
 using json = nlohmann::json;
 
-// === OBSERVER КЛАССЫ (без изменений) ===
+
 
 class LocalSetRemoteDescriptionObserver : public webrtc::SetRemoteDescriptionObserverInterface {
 public:
@@ -267,7 +267,7 @@ void RTCManager::startStreaming(const std::string& clientId, const StreamingConf
         return;
     }
 
-    // Создаем DataChannel для синхронизации
+ 
     if (config.enable_sync) {
         webrtc::DataChannelInit data_channel_config;
         data_channel_config.ordered = true;
@@ -281,7 +281,7 @@ void RTCManager::startStreaming(const std::string& clientId, const StreamingConf
     }
 
     it->second.is_streaming = true;
-    it->second.video_source = video_source; // Сохраняем ссылку на source
+    it->second.video_source = video_source; 
     video_source->Start();
 
     std::cout << "[OK] Streaming active for: " << clientId << std::endl;
@@ -375,7 +375,7 @@ void RTCManager::handleIceCandidate(const std::string& clientId, const std::stri
 }
 
 void RTCManager::closePeerConnection(const std::string& clientId) {
-    stopStreaming(clientId); // Остановим стриминг перед закрытием
+    stopStreaming(clientId);
 
     auto it = peer_connections_.find(clientId);
     if (it != peer_connections_.end()) {
@@ -405,8 +405,6 @@ void RTCManager::sendPlaybackPosition(const std::string& clientId, double curren
         std::cerr << "[WARN] Failed to send sync data to: " << clientId << std::endl;
     }
 }
-
-// === FileVideoTrackSource с FFmpeg декодированием ===
 
 RTCManager::FileVideoTrackSource::FileVideoTrackSource()
     : webrtc::AdaptedVideoTrackSource() {
@@ -440,12 +438,12 @@ void RTCManager::FileVideoTrackSource::CaptureLoop() {
     AVFormatContext* format_ctx = nullptr;
     AVCodecContext* codec_ctx = nullptr;
     AVFrame* frame = nullptr;
-    AVFrame* frame_rgb = nullptr;
+    AVFrame* frame_rgb = nullptr; 
     AVPacket* packet = nullptr;
     SwsContext* sws_ctx = nullptr;
     int video_stream_idx = -1;
 
-    // Инициализация FFmpeg
+   
     if (avformat_open_input(&format_ctx, file_path_.c_str(), nullptr, nullptr) < 0) {
         std::cerr << "[ERR] Cannot open video file: " << file_path_ << std::endl;
         return;
@@ -457,7 +455,7 @@ void RTCManager::FileVideoTrackSource::CaptureLoop() {
         return;
     }
 
-    // Найти видео поток
+
     for (unsigned i = 0; i < format_ctx->nb_streams; i++) {
         if (format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             video_stream_idx = i;
@@ -471,6 +469,7 @@ void RTCManager::FileVideoTrackSource::CaptureLoop() {
         return;
     }
 
+
     AVCodecParameters* codec_params = format_ctx->streams[video_stream_idx]->codecpar;
     const AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
     if (!codec) {
@@ -482,6 +481,8 @@ void RTCManager::FileVideoTrackSource::CaptureLoop() {
     codec_ctx = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(codec_ctx, codec_params);
 
+    codec_ctx->thread_count = 0;
+
     if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
         std::cerr << "[ERR] Cannot open codec" << std::endl;
         avcodec_free_context(&codec_ctx);
@@ -490,86 +491,119 @@ void RTCManager::FileVideoTrackSource::CaptureLoop() {
     }
 
     frame = av_frame_alloc();
-    frame_rgb = av_frame_alloc();
     packet = av_packet_alloc();
 
     int width = codec_ctx->width;
     int height = codec_ctx->height;
 
-    // Создаем контекст для конвертации в I420 (YUV420P)
+   
     sws_ctx = sws_getContext(
         width, height, codec_ctx->pix_fmt,
         width, height, AV_PIX_FMT_YUV420P,
         SWS_BILINEAR, nullptr, nullptr, nullptr
     );
 
-    std::cout << "[VIDEO] Starting playback: " << width << "x" << height << std::endl;
+ 
+    double fps = av_q2d(format_ctx->streams[video_stream_idx]->avg_frame_rate);
+    if (fps < 1.0) fps = av_q2d(format_ctx->streams[video_stream_idx]->r_frame_rate);
+    if (fps < 1.0 || std::isnan(fps)) {
+        fps = 30.0;
+        std::cout << "[WARN] FPS not detected, defaulting to 30.0" << std::endl;
+    }
 
-    auto start_time = std::chrono::steady_clock::now();
-    int64_t frame_count = 0;
-    double fps = av_q2d(format_ctx->streams[video_stream_idx]->r_frame_rate);
     auto frame_duration = std::chrono::microseconds(static_cast<int64_t>(1000000.0 / fps));
+    std::cout << "[VIDEO] Playing: " << width << "x" << height << " @ " << fps << " FPS" << std::endl;
 
     current_time_ = 0.0;
     is_playing_ = true;
 
-    while (running_ && av_read_frame(format_ctx, packet) >= 0) {
-        if (packet->stream_index == video_stream_idx) {
-            if (avcodec_send_packet(codec_ctx, packet) == 0) {
-                while (avcodec_receive_frame(codec_ctx, frame) == 0) {
-                    // Создаем I420 буфер для WebRTC
-                    webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer =
-                        webrtc::I420Buffer::Create(width, height);
+    while (running_) {
 
-                    // Конвертируем в I420
-                    uint8_t* dest[3] = {
-                        i420_buffer->MutableDataY(),
-                        i420_buffer->MutableDataU(),
-                        i420_buffer->MutableDataV()
-                    };
-                    int dest_stride[3] = {
-                        i420_buffer->StrideY(),
-                        i420_buffer->StrideU(),
-                        i420_buffer->StrideV()
-                    };
+        auto start_time = std::chrono::steady_clock::now();
+        int64_t frame_count = 0;
 
-                    sws_scale(sws_ctx, frame->data, frame->linesize, 0, height, dest, dest_stride);
+        av_seek_frame(format_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(codec_ctx); 
 
-                    // Создаем VideoFrame
-                    int64_t timestamp_us = frame_count * 1000000 / static_cast<int64_t>(fps);
-                    webrtc::VideoFrame video_frame = webrtc::VideoFrame::Builder()
-                        .set_video_frame_buffer(i420_buffer)
-                        .set_timestamp_us(timestamp_us)
-                        .build();
+        std::cout << "[VIDEO] Starting/Looping stream..." << std::endl;
 
-                    OnFrame(video_frame);
+     
+        while (running_ && av_read_frame(format_ctx, packet) >= 0) {
+            if (packet->stream_index == video_stream_idx) {
 
-                    // Обновляем текущее время
-                    current_time_ = static_cast<double>(timestamp_us) / 1000000.0;
 
-                    frame_count++;
+                int send_ret = avcodec_send_packet(codec_ctx, packet);
+                if (send_ret < 0) {
+                    std::cerr << "[ERR] Error sending packet to decoder: " << send_ret << std::endl;
+                }
+                else {
 
-                    // Контроль частоты кадров
-                    auto target_time = start_time + frame_duration * frame_count;
-                    auto now = std::chrono::steady_clock::now();
-                    if (now < target_time) {
+                    while (true) {
+                        int receive_ret = avcodec_receive_frame(codec_ctx, frame);
+
+                        if (receive_ret == AVERROR(EAGAIN) || receive_ret == AVERROR_EOF) {
+                            break; 
+                        }
+                        else if (receive_ret < 0) {
+
+                            char err_buf[AV_ERROR_MAX_STRING_SIZE];
+                            av_strerror(receive_ret, err_buf, AV_ERROR_MAX_STRING_SIZE);
+                            std::cerr << "[ERR] Decoder error: " << err_buf << " (" << receive_ret << ")" << std::endl;
+                            break;
+                        }
+
+          
+                        std::cout << "[VIDEO-FRAME] Decoded and processed frame #" << frame_count << " (TS: " << frame->pts << ")" << std::endl;
+
+                        webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer =
+                            webrtc::I420Buffer::Create(width, height);
+
+      
+                        uint8_t* dest[3] = {
+                            i420_buffer->MutableDataY(),
+                            i420_buffer->MutableDataU(),
+                            i420_buffer->MutableDataV()
+                        };
+                        int dest_stride[3] = {
+                            i420_buffer->StrideY(),
+                            i420_buffer->StrideU(),
+                            i420_buffer->StrideV()
+                        };
+
+                        sws_scale(sws_ctx, frame->data, frame->linesize, 0, height, dest, dest_stride);
+
+                        int64_t timestamp_us = frame_count * 1000000 / static_cast<int64_t>(fps);
+
+                        webrtc::VideoFrame video_frame = webrtc::VideoFrame::Builder()
+                            .set_video_frame_buffer(i420_buffer)
+                            .set_timestamp_us(timestamp_us)
+                            .set_rotation(webrtc::kVideoRotation_0)
+                            .build();
+
+                        OnFrame(video_frame);
+
+                        current_time_ = static_cast<double>(timestamp_us) / 1000000.0;
+                        frame_count++;
+
+                      
+                        auto target_time = start_time + frame_duration * frame_count;
                         std::this_thread::sleep_until(target_time);
                     }
                 }
             }
+            av_packet_unref(packet);
         }
-        av_packet_unref(packet);
+        if (!running_) break;
     }
 
-    // Очистка
+    // 6. Очистка ресурсов
     av_packet_free(&packet);
     av_frame_free(&frame);
-    av_frame_free(&frame_rgb);
     sws_freeContext(sws_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&format_ctx);
 
-    std::cout << "[VIDEO] Playback finished" << std::endl;
+    std::cout << "[VIDEO] Playback finished completely" << std::endl;
 }
 
 double RTCManager::FileVideoTrackSource::getCurrentTime() const {

@@ -1,6 +1,4 @@
-﻿// SharedState.cpp - с добавленной синхронизацией воспроизведения
-
-#pragma warning(disable: 4566)
+﻿#pragma warning(disable: 4566)
 #pragma warning(disable: 4146)
 #pragma warning(disable: 4068)
 
@@ -15,7 +13,6 @@ using json = nlohmann::json;
 SharedState::SharedState() : rtc_manager_(std::make_unique<RTCManager>()) {
     rtc_manager_->initialize();
 
-    // Запускаем поток для отправки синхронизации
     sync_running_ = true;
     sync_thread_ = std::thread(&SharedState::syncLoop, this);
 }
@@ -116,11 +113,11 @@ void SharedState::send(std::string message, std::shared_ptr<WebSocketSession> se
             rtc_manager_->handleIceCandidate(client_id, candidate, sdpMid, sdpMLineIndex);
         }
         else if (type == "sync_request") {
-            // Клиент запрашивает текущее состояние синхронизации
+
             std::cout << "[SYNC] Sync request from " << client_id << std::endl;
         }
         else {
-            // Ретрансляция другим клиентам
+
             auto const ss = std::make_shared<std::string const>(std::move(message));
             for (auto& weak_session : sessions_) {
                 if (auto session = weak_session.lock()) {
@@ -153,11 +150,10 @@ void SharedState::syncLoop() {
     std::cout << "[SYNC] Sync loop started" << std::endl;
 
     while (sync_running_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Синхронизация каждые 100ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
 
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // Отправляем состояние воспроизведения каждому подключенному клиенту
         for (const auto& [session, client_id] : session_to_client_id_) {
             rtc_manager_->sendPlaybackPosition(client_id, 0.0, true);
         }
