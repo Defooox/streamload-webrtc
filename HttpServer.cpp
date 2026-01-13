@@ -16,25 +16,25 @@
 #include <random>
 #include <sstream>
 
+
 using json = nlohmann::json;
 
 namespace {
 
-    // Keep only a safe basename (no paths). Also avoid weird characters.
     std::string sanitize_basename(std::string name) {
-        // Drop any path components
+
         auto pos1 = name.find_last_of('/');
         auto pos2 = name.find_last_of('\\');
         auto pos = (pos1 == std::string::npos) ? pos2 : (pos2 == std::string::npos ? pos1 : std::max(pos1, pos2));
         if (pos != std::string::npos) name = name.substr(pos + 1);
 
-        // Replace unsafe chars
+     
         for (char& c : name) {
             const bool ok = std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-';
             if (!ok) c = '_';
         }
 
-        // Prevent empty / dot-only
+
         bool any_alnum = false;
         for (char c : name) if (std::isalnum(static_cast<unsigned char>(c))) { any_alnum = true; break; }
         if (!any_alnum) name = "upload.bin";
@@ -50,13 +50,13 @@ namespace {
         return oss.str();
     }
 
-} // namespace
+} 
 
 class HttpSession : public std::enable_shared_from_this<HttpSession> {
     beast::tcp_stream stream_;
     beast::flat_buffer buffer_;
 
-    //  Streaming parser: we read header first, then stream body with async_read_some
+
     std::unique_ptr<http::request_parser<http::buffer_body>> parser_;
     http::request<http::buffer_body> req_;
     std::shared_ptr<void> res_;
@@ -64,7 +64,6 @@ class HttpSession : public std::enable_shared_from_this<HttpSession> {
     std::string upload_path_;
     std::string web_root_;
 
-    // Upload streaming state
     std::ofstream upload_file_;
     std::string upload_full_path_;
     std::size_t upload_bytes_written_{ 0 };
@@ -86,13 +85,13 @@ public:
 private:
     void do_read() {
         parser_ = std::make_unique<http::request_parser<http::buffer_body>>();
-        // Hard limit still matters for chunked uploads
+ 
         parser_->body_limit(500 * 1024 * 1024);
 
         stream_.expires_after(std::chrono::seconds(300));
         buffer_.clear();
 
-        // ✅ Read header first
+   
         http::async_read_header(stream_, buffer_, *parser_,
             beast::bind_front_handler(&HttpSession::on_read_header, shared_from_this()));
     }
@@ -108,10 +107,10 @@ private:
             return fail(ec, "read_header");
         }
 
-        // Transfer header into req_
+
         req_ = parser_->get();
 
-        // Route based on method/target
+    
         const beast::string_view target = req_.target();
         const bool is_upload_raw = target.size() >= 11 && target.substr(0, 11) == "/upload_raw";
 
@@ -119,7 +118,7 @@ private:
             return begin_streaming_upload();
         }
 
-        // For everything else, we don't need a body. Just handle now.
+
         handle_request_no_body();
     }
 
@@ -130,22 +129,22 @@ private:
         std::cout << "[HTTP] Content-Length: " << req_[http::field::content_length] << std::endl;
         std::cout << "[HTTP] Content-Type: " << req_[http::field::content_type] << std::endl;
 
-        // Ensure upload dir exists
+ 
         try {
             std::filesystem::create_directories(upload_path_);
         }
         catch (...) {
-            // ignore, will fail on open anyway
+    
         }
 
-        // Optional client filename via header
+     
         std::string client_name;
         auto it = req_.find("X-Filename");
         if (it != req_.end()) {
             client_name = sanitize_basename(std::string(it->value()));
         }
 
-        // Generate a collision-resistant server filename
+    
         const auto now = std::chrono::system_clock::now().time_since_epoch();
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
 
@@ -169,14 +168,14 @@ private:
             return send_simple_error(http::status::internal_server_error, "Cannot save file");
         }
 
-        // Start streaming body
+    
         do_read_upload_body();
     }
 
     void do_read_upload_body() {
-        // Provide buffer to parser
-        req_.body().data = body_buf_.data();
-        req_.body().size = body_buf_.size();
+        auto& preq = parser_->get();         
+        preq.body().data = body_buf_.data();
+        preq.body().size = body_buf_.size();
 
         http::async_read_some(stream_, buffer_, *parser_,
             beast::bind_front_handler(&HttpSession::on_read_upload_body, shared_from_this()));
@@ -186,12 +185,12 @@ private:
         boost::ignore_unused(bytes_transferred);
 
         if (ec == http::error::need_buffer) {
-            // Not an error; continue
+      
             return do_read_upload_body();
         }
 
         if (ec == http::error::end_of_stream) {
-            // Client closed early
+        
             std::cerr << "[HTTP] Client closed stream during upload" << std::endl;
             upload_file_.close();
             return do_close();
@@ -203,8 +202,8 @@ private:
             return fail(ec, "upload_read");
         }
 
-        // How many bytes were written into body_buf_?
-        const std::size_t remaining = req_.body().size;
+        auto& preq = parser_->get();
+        const std::size_t remaining = preq.body().size;
         const std::size_t bytes_in_chunk = body_buf_.size() - remaining;
 
         if (bytes_in_chunk > 0) {
@@ -228,13 +227,12 @@ private:
             res->set(http::field::server, BOOST_BEAST_VERSION_STRING);
             res->set(http::field::content_type, "application/json");
             res->set(http::field::access_control_allow_origin, "*");
-            res->keep_alive(req_.keep_alive());
+            res->keep_alive(parser_->get().keep_alive());
             res->body() = response_json.dump();
             res->prepare_payload();
             return send_response(res);
         }
 
-        // Continue reading
         do_read_upload_body();
     }
 
@@ -326,7 +324,7 @@ private:
             return send_response(res);
         }
 
-        // Old multipart endpoint: intentionally deprecated (it buffers whole file in RAM if implemented naively).
+
         if (req_.method() == http::verb::post && req_.target() == "/upload") {
             json j;
             j["status"] = "error";

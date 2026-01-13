@@ -134,14 +134,13 @@ function createPeerConnection() {
 
     remoteStream = new MediaStream();
     video.srcObject = null;
+    video.muted = true;    
+    video.autoplay = true;
     video.playsInline = true;
 
     pc = new RTCPeerConnection({
         iceServers: [
             { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
-            { urls: "turn:numb.viagenie.ca", username: "webrtc@live.com", credential: "muazkh" },
-            { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
-            { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
         ]
     });
 
@@ -154,7 +153,7 @@ function createPeerConnection() {
             remoteStream.addTrack(ev.track);
             video.srcObject = remoteStream;
         }
-
+        video.muted = true;
         const p = video.play();
         if (p && typeof p.catch === "function") {
             p.catch(() => log("Видео не стартануло автоматически (autoplay). Кликни по странице/нажми Play."));
@@ -315,16 +314,13 @@ function addFileOption(filePath) {
 
 function uploadFile() {
     const file = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-    if (!file) {
-        uploadInfo.textContent = "Файл не выбран.";
-        return;
-    }
+    if (!file) { uploadInfo.textContent = "Файл не выбран."; return; }
 
     progressBar.style.width = "0%";
     uploadInfo.textContent = `Загрузка: ${file.name} (${Math.round(file.size / 1024 / 1024)} MB)`;
 
     const xhr = new XMLHttpRequest();
-    xhr.open("PUT", "/upload_raw", true);
+    xhr.open("PUT", "/upload_raw");
     xhr.setRequestHeader("X-Filename", file.name);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
@@ -341,25 +337,19 @@ function uploadFile() {
             try {
                 const data = JSON.parse(xhr.responseText);
                 const filePath = data.file_path;
-                uploadInfo.textContent = "OK: " + filePath;
-                log("UPLOAD OK: " + filePath);
+                uploadInfo.textContent = "OK. Сохранено: " + filePath;
                 if (filePath) addFileOption(filePath);
             } catch {
-                uploadInfo.textContent = "Upload OK (non-JSON response)";
-                log("UPLOAD OK (non-JSON)");
+                uploadInfo.textContent = "Upload OK, но ответ не JSON.";
             }
         } else {
             uploadInfo.textContent = `Ошибка upload: HTTP ${xhr.status}`;
-            log("UPLOAD FAIL: HTTP " + xhr.status + " body=" + (xhr.responseText || ""));
         }
     };
 
-    xhr.onerror = () => {
-        uploadInfo.textContent = "Ошибка сети при upload.";
-        log("UPLOAD FAIL: network error");
-    };
+    xhr.onerror = () => { uploadInfo.textContent = "Ошибка сети при upload."; };
 
-    xhr.send(file);
+    xhr.send(file); 
 }
 
 

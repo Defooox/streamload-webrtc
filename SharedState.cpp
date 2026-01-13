@@ -35,10 +35,10 @@ void SharedState::join(std::shared_ptr<WebSocketSession> session) {
 
         sessions_.insert(session);
 
-        // Стабильный id на базе адреса объекта (как у тебя и было)
+   
         client_id = "client_" + std::to_string(reinterpret_cast<uintptr_t>(session.get()));
 
-        // ✅ Храним только weak_ptr
+    
         session_to_client_id_[std::weak_ptr<WebSocketSession>(session)] = client_id;
 
         std::cout << "[STATE] ======================================" << std::endl;
@@ -47,11 +47,11 @@ void SharedState::join(std::shared_ptr<WebSocketSession> session) {
         std::cout << "[STATE] ======================================" << std::endl;
     }
 
-    // Create PeerConnection (RTCManager не потокобезопасен относительно наших потоков)
+
     {
         std::lock_guard<std::mutex> rtc_lock(rtc_mutex_);
 
-        // ✅ Разрываем цикл: callback держит только weak_ptr на session
+    
         std::weak_ptr<WebSocketSession> weak_session = session;
 
         rtc_manager_->createPeerConnection(client_id, [this, weak_session](const std::string& msg) {
@@ -71,7 +71,7 @@ void SharedState::leave(std::shared_ptr<WebSocketSession> session) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // Найдём client_id по weak ключу
+    
         auto it = session_to_client_id_.find(std::weak_ptr<WebSocketSession>(session));
         if (it != session_to_client_id_.end()) {
             client_id = it->second;
@@ -180,7 +180,7 @@ void SharedState::sendToSession(std::shared_ptr<WebSocketSession> session, const
         std::cout << "[STATE] Sending to client (non-JSON)" << std::endl;
     }
 
-    // send(...) потокобезопасен (у тебя через strand)
+    
     session->send(std::make_shared<std::string const>(message));
 }
 
@@ -190,7 +190,7 @@ void SharedState::syncLoop() {
     while (sync_running_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-        // 1) Считываем streaming + время под rtc_mutex_
+
         bool streaming = false;
         double time = 0.0;
         {
@@ -200,7 +200,7 @@ void SharedState::syncLoop() {
         }
         if (!streaming) continue;
 
-        // 2) Снимем список client_id и подчистим expired weak_ptr
+      
         std::vector<std::string> client_ids;
         client_ids.reserve(64);
 
@@ -216,7 +216,7 @@ void SharedState::syncLoop() {
                 ++it;
             }
 
-            // (опционально) подчистим sessions_ от expired тоже
+
             for (auto it = sessions_.begin(); it != sessions_.end();) {
                 if (it->expired()) it = sessions_.erase(it);
                 else ++it;
@@ -225,7 +225,6 @@ void SharedState::syncLoop() {
 
         if (client_ids.empty()) continue;
 
-        // 3) Рассылаем всем уже без mutex_ (только rtc_mutex_)
         {
             std::lock_guard<std::mutex> rtc_lock(rtc_mutex_);
             for (const auto& client_id : client_ids) {

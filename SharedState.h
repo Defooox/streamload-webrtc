@@ -15,10 +15,10 @@ class RTCManager;
 class SharedState {
     std::mutex mutex_;
 
-    // ƒл€ подсчЄта клиентов (weak Ч не держим сессии живыми)
+
     std::set<std::weak_ptr<WebSocketSession>, std::owner_less<std::weak_ptr<WebSocketSession>>> sessions_;
 
-    //  ¬ј∆Ќќ: больше не держим shared_ptr как ключ (иначе сесси€ никогда не освободитс€)
+    
     std::map<std::weak_ptr<WebSocketSession>, std::string, std::owner_less<std::weak_ptr<WebSocketSession>>> session_to_client_id_;
 
     std::unique_ptr<RTCManager> rtc_manager_;

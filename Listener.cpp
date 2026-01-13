@@ -47,10 +47,10 @@ void Listener::on_accept(beast::error_code ec, tcp::socket socket) {
         return;
     }
 
-    // —разу принимаем следующий коннект (сервер не блокируетс€ на этом клиенте)
+
     do_accept();
 
-    // Ќам нужно прочитать HTTP request, чтобы пон€ть upgrade ли это
+
     auto sp_socket = std::make_shared<tcp::socket>(std::move(socket));
     auto buffer = std::make_shared<beast::flat_buffer>();
     auto req = std::make_shared<http::request<http::string_body>>();
@@ -69,7 +69,7 @@ void Listener::on_accept(beast::error_code ec, tcp::socket socket) {
             }
 
             if (!websocket::is_upgrade(*req)) {
-                // Ќ≈ WebSocket upgrade Ч отвечаем 426 и закрываем соединение
+     
                 http::response<http::string_body> res{ http::status::upgrade_required, req->version() };
                 res.set(http::field::server, "RTCServer");
                 res.set(http::field::content_type, "text/plain; charset=utf-8");
@@ -89,7 +89,7 @@ void Listener::on_accept(beast::error_code ec, tcp::socket socket) {
                 return;
             }
 
-            // Ёто WebSocket upgrade Ч передаЄм сокет в WebSocketSession
+   
             auto session = std::make_shared<WebSocketSession>(std::move(*sp_socket), state_, ioc_);
             session->run(std::move(*req));
         }

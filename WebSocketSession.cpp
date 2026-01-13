@@ -13,14 +13,13 @@ WebSocketSession::WebSocketSession(tcp::socket socket,
 }
 
 void WebSocketSession::run(http::request<http::string_body> req) {
-    // Таймауты и настройки для WS
+
     ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
     ws_.set_option(websocket::stream_base::decorator(
         [](websocket::response_type& res) {
             res.set(http::field::server, "RTCServer");
         }));
 
-    //  Лимит размера входящих сообщений
     ws_.read_message_max(kMaxIncomingMessageBytes);
 
     ws_.async_accept(
@@ -67,10 +66,9 @@ void WebSocketSession::on_read(beast::error_code ec, std::size_t) {
     std::string msg = beast::buffers_to_string(buffer_.data());
     buffer_.consume(buffer_.size());
 
-    // КРИТИЧНО: сразу продолжаем чтение, чтобы не терять ICE/answer во время тяжёлой обработки
+  
     do_read();
 
-    // Обрабатываем сообщение вне strand (иначе start_stream блокирует прием новых сообщений)
     auto self = shared_from_this();
     net::post(
         ws_.get_executor(),
@@ -89,7 +87,7 @@ void WebSocketSession::send(std::shared_ptr<std::string const> const& msg) {
         [self = shared_from_this(), msg]() {
             if (self->closing_) return;
 
-            //  Ограничиваем исходящую очередь
+    
             if (self->write_queue_.size() >= kMaxWriteQueue) {
                 std::cerr << "[WS] write queue overflow (" << self->write_queue_.size()
                     << "), closing session\n";
@@ -142,7 +140,7 @@ void WebSocketSession::do_close(websocket::close_reason reason) {
     if (closing_) return;
     closing_ = true;
 
-    // Очередь больше не нужна
+
     write_queue_.clear();
 
     ws_.async_close(
@@ -156,7 +154,7 @@ void WebSocketSession::do_close(websocket::close_reason reason) {
 
 void WebSocketSession::on_close(beast::error_code ec) {
     if (ec) {
-        // Нормально видеть operation_aborted если сокет уже умер
+  
         std::cerr << "[WS] close error: " << ec.message() << "\n";
     }
     leave_state_once();

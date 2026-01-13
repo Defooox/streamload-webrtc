@@ -101,9 +101,6 @@ public:
         std::cout << "\n[ICE] ========================================" << std::endl;
         std::cout << "[ICE] New candidate for " << client_id_ << std::endl;
 
-        //std::string candidate_type = candidate->candidate().type();
-       // std::cout << "[ICE]   Type: " << candidate_type << std::endl;
-
         std::string protocol = candidate->candidate().protocol();
         std::cout << "[ICE]   Protocol: " << protocol << std::endl;
 
@@ -205,7 +202,7 @@ public:
     }
 
     void OnSuccess(webrtc::SessionDescriptionInterface* desc) override {
-        // Забираем владение сразу, чтобы не было use-after-free после передачи в SetLocalDescription
+
         std::unique_ptr<webrtc::SessionDescriptionInterface> local_desc(desc);
 
         const auto sdp_type = local_desc->GetType();
@@ -253,10 +250,10 @@ private:
 RTCManager::RTCManager() {}
 
 RTCManager::~RTCManager() {
-    // Остановим источник видео
+ 
     stopGlobalStream();
 
-    // Корректно закроем все peer connections (вместо clear)
+
     std::vector<std::string> ids;
     {
         std::lock_guard<std::mutex> lock(pc_mutex_);
@@ -274,6 +271,7 @@ RTCManager::~RTCManager() {
 
     if (signaling_thread_) signaling_thread_->Stop();
     if (worker_thread_) worker_thread_->Stop();
+    if (network_thread_) network_thread_->Stop();
 }
 
 class RTCManager::RemoteDescriptionObserver
@@ -303,6 +301,11 @@ void RTCManager::initialize() {
     std::cout << "[RTC] Initializing WebRTC..." << std::endl;
     webrtc::InitializeSSL();
 
+    network_thread_ = webrtc::Thread::CreateWithSocketServer();
+    network_thread_->SetName("NetworkThread", nullptr);
+    network_thread_->Start();
+
+
     signaling_thread_ = webrtc::Thread::Create();
     signaling_thread_->SetName("SignalingThread", nullptr);
     signaling_thread_->Start();
@@ -312,10 +315,16 @@ void RTCManager::initialize() {
     worker_thread_->Start();
 
     peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
-        worker_thread_.get(), worker_thread_.get(), signaling_thread_.get(), nullptr,
-        webrtc::CreateBuiltinAudioEncoderFactory(), webrtc::CreateBuiltinAudioDecoderFactory(),
-        webrtc::CreateBuiltinVideoEncoderFactory(), webrtc::CreateBuiltinVideoDecoderFactory(),
-        nullptr, nullptr
+        network_thread_.get(),
+        worker_thread_.get(),
+        signaling_thread_.get(),
+        nullptr,  
+        webrtc::CreateBuiltinAudioEncoderFactory(),
+        webrtc::CreateBuiltinAudioDecoderFactory(),
+        webrtc::CreateBuiltinVideoEncoderFactory(),
+        webrtc::CreateBuiltinVideoDecoderFactory(),
+        nullptr,  
+        nullptr   
     );
 
     if (!peer_connection_factory_) {
@@ -333,7 +342,7 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
     webrtc::PeerConnectionInterface::RTCConfiguration config;
     config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
 
-    // STUN
+    
     std::cout << "[ICE] Configuring STUN servers..." << std::endl;
 
     webrtc::PeerConnectionInterface::IceServer stun1;
@@ -346,7 +355,7 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
     config.servers.push_back(stun2);
     std::cout << "[ICE]   ✓ " << stun2.uri << std::endl;
 
-    // TURN
+    
     std::cout << "[ICE] Configuring TURN servers..." << std::endl;
 
     webrtc::PeerConnectionInterface::IceServer turn1;
@@ -370,14 +379,14 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
     config.servers.push_back(turn3);
     std::cout << "[ICE]   ✓ " << turn3.uri << " (TCP)" << std::endl;
 
-    // ICE settings
-    config.tcp_candidate_policy = webrtc::PeerConnectionInterface::kTcpCandidatePolicyEnabled;
+
+    config.tcp_candidate_policy = webrtc::PeerConnectionInterface::kTcpCandidatePolicyDisabled;
     config.continual_gathering_policy = webrtc::PeerConnectionInterface::GATHER_CONTINUALLY;
     config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
     config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
     config.type = webrtc::PeerConnectionInterface::kAll;
 
-    std::cout << "[ICE] TCP candidates: ENABLED" << std::endl;
+    std::cout << "[ICE] TCP candidates: DISABLED" << std::endl;
     std::cout << "[ICE] Continual gathering: ENABLED" << std::endl;
     std::cout << "[RTC] ========================================\n" << std::endl;
 
@@ -395,7 +404,6 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
     context.observer = observer;
     context.callback = callback;
 
-    // DataChannel (sync)
     webrtc::DataChannelInit dc_config;
     dc_config.ordered = true;
 
@@ -412,7 +420,7 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
         std::cerr << "[DC]  CreateDataChannel returned null for " << clientId << std::endl;
     }
 
-    // Store
+ 
     {
         std::lock_guard<std::mutex> lock(pc_mutex_);
         peer_connections_[clientId] = std::move(context);
@@ -420,11 +428,11 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
 
     std::cout << "[RTC] ✓ PeerConnection created for " << clientId << std::endl;
 
-    // ✅ Если стрим уже запущен — добавляем видео-трек и отправляем offer новому клиенту
+
     if (global_video_source_) {
         std::cout << "[RTC] Stream is active -> attaching track + creating offer for " << clientId << std::endl;
 
-        // Забираем pc + callback безопасно
+       
         webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc_ref;
         OnMessageCallback cb_ref;
 
@@ -435,20 +443,19 @@ void RTCManager::createPeerConnection(const std::string& clientId, OnMessageCall
             pc_ref = pit->second.peer_connection;
             cb_ref = pit->second.callback;
 
-            // если вдруг уже есть трек — не дублируем
+    
             if (pit->second.video_track) {
                 std::cout << "[RTC] Video track already exists for " << clientId << std::endl;
                 return;
             }
         }
 
-        // Offer делаем только из stable
         if (pc_ref->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
             std::cout << "[RTC] ⚠️ Not stable, skipping offer for now: " << clientId << std::endl;
             return;
         }
 
-        // Создаём и добавляем видео трек
+
         auto video_track = peer_connection_factory_->CreateVideoTrack(global_video_source_, "video_label");
         auto add_res = pc_ref->AddTrack(video_track, { STREAM_ID });
         if (!add_res.ok()) {
@@ -524,18 +531,6 @@ void RTCManager::handleOffer(const std::string& clientId, const std::string& sdp
     std::cout << "[RTC] Handling Offer from " << clientId << std::endl;
     std::cout << "[RTC] ========================================" << std::endl;
 
-    std::lock_guard<std::mutex> lock(pc_mutex_);
-    auto it = peer_connections_.find(clientId);
-    if (it == peer_connections_.end()) {
-        std::cerr << "[ERR] No peer connection for " << clientId << std::endl;
-        return;
-    }
-
-    auto& context = it->second;
-
-    auto current_state = context.peer_connection->signaling_state();
-    std::cout << "[RTC] Current signaling state: " << static_cast<int>(current_state) << std::endl;
-
     webrtc::SdpParseError error;
     std::unique_ptr<webrtc::SessionDescriptionInterface> desc =
         webrtc::CreateSessionDescription(webrtc::SdpType::kOffer, sdp, &error);
@@ -545,18 +540,40 @@ void RTCManager::handleOffer(const std::string& clientId, const std::string& sdp
         return;
     }
 
-    if (global_video_source_ && !context.video_track) {
+    webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc_ref;
+    bool has_video_track = false;
+
+    {
+        std::lock_guard<std::mutex> lock(pc_mutex_);
+        auto it = peer_connections_.find(clientId);
+        if (it == peer_connections_.end()) {
+            std::cerr << "[ERR] No peer connection for " << clientId << std::endl;
+            return;
+        }
+
+        pc_ref = it->second.peer_connection;
+        has_video_track = (it->second.video_track != nullptr);
+
+        auto current_state = pc_ref->signaling_state();
+        std::cout << "[RTC] Current signaling state: " << static_cast<int>(current_state) << std::endl;
+    }
+
+
+    if (global_video_source_ && !has_video_track) {
         std::cout << "[RTC] Adding video track BEFORE setting remote description..." << std::endl;
 
-        webrtc::scoped_refptr<webrtc::VideoTrackInterface> video_track =
-            peer_connection_factory_->CreateVideoTrack(global_video_source_, "video_label");
-
-        context.video_track = video_track;
-
-        auto sender_res = context.peer_connection->AddTrack(video_track, { STREAM_ID });
+        auto video_track = peer_connection_factory_->CreateVideoTrack(global_video_source_, "video_label");
+        auto sender_res = pc_ref->AddTrack(video_track, { STREAM_ID });
 
         if (sender_res.ok()) {
             std::cout << "[RTC] ✓ Video track added successfully" << std::endl;
+
+          
+            std::lock_guard<std::mutex> lock(pc_mutex_);
+            auto it = peer_connections_.find(clientId);
+            if (it != peer_connections_.end() && !it->second.video_track) {
+                it->second.video_track = video_track;
+            }
         }
         else {
             std::cerr << "[ERR] ✗ Failed to add track: " << sender_res.error().message() << std::endl;
@@ -569,21 +586,18 @@ void RTCManager::handleOffer(const std::string& clientId, const std::string& sdp
         std::cout << "[RTC] Video track already exists" << std::endl;
     }
 
+  
     std::cout << "[RTC] Setting remote description (offer)..." << std::endl;
     auto obs = webrtc::make_ref_counted<RTCManager::RemoteDescriptionObserver>(this, clientId, true);
-    context.peer_connection->SetRemoteDescription(std::move(desc), obs);
+    pc_ref->SetRemoteDescription(std::move(desc), obs);
+
     std::cout << "[RTC] ========================================\n" << std::endl;
 }
+
 
 void RTCManager::handleAnswer(const std::string& clientId, const std::string& sdp) {
     std::cout << "[RTC] Handling Answer from " << clientId << std::endl;
 
-    std::lock_guard<std::mutex> lock(pc_mutex_);
-    auto it = peer_connections_.find(clientId);
-    if (it == peer_connections_.end()) {
-        std::cerr << "[ERR] No peer connection for " << clientId << std::endl;
-        return;
-    }
 
     webrtc::SdpParseError error;
     std::unique_ptr<webrtc::SessionDescriptionInterface> desc =
@@ -594,19 +608,29 @@ void RTCManager::handleAnswer(const std::string& clientId, const std::string& sd
         return;
     }
 
+
+    webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc_ref;
+    {
+        std::lock_guard<std::mutex> lock(pc_mutex_);
+        auto it = peer_connections_.find(clientId);
+        if (it == peer_connections_.end()) {
+            std::cerr << "[ERR] No peer connection for " << clientId << std::endl;
+            return;
+        }
+        pc_ref = it->second.peer_connection;
+    }
+
+
     std::cout << "[RTC] Setting remote description (answer)..." << std::endl;
     auto obs = webrtc::make_ref_counted<RTCManager::RemoteDescriptionObserver>(this, clientId, false);
-    it->second.peer_connection->SetRemoteDescription(std::move(desc), obs);
-
+    pc_ref->SetRemoteDescription(std::move(desc), obs);
 
     std::cout << "[RTC] Answer processed successfully" << std::endl;
 }
 
+
 void RTCManager::startGlobalStream(const StreamingConfig& config) {
-    std::cout << "\n[STREAM] ========================================" << std::endl;
-    std::cout << "[STREAM] Starting global stream" << std::endl;
-    std::cout << "[STREAM] File: " << config.video_file_path << std::endl;
-    std::cout << "[STREAM] ========================================\n" << std::endl;
+    std::cout << "[RTC] Starting global stream..." << std::endl;
 
     if (global_video_source_) {
         std::cerr << "[RTC] Stream already running, stopping first..." << std::endl;
@@ -617,86 +641,112 @@ void RTCManager::startGlobalStream(const StreamingConfig& config) {
         config.video_file_path,
         config.loop
     );
-
     global_video_source_->Start();
 
-    std::cout << "[STREAM] Waiting for video source to initialize..." << std::endl;
+    std::cout << "[RTC] Waiting for video source to initialize..." << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    std::lock_guard<std::mutex> lock(pc_mutex_);
+    struct Target {
+        std::string clientId;
+        webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc;
+        OnMessageCallback cb;
+        bool has_track = false;
+    };
 
-    if (peer_connections_.empty()) {
-        std::cout << "[STREAM] No clients connected yet, stream ready for new connections" << std::endl;
-        return;
-    }
+    std::vector<Target> targets;
+    targets.reserve(32);
 
-    std::cout << "[STREAM] Adding tracks to " << peer_connections_.size() << " existing client(s)..." << std::endl;
+    {
+        std::lock_guard<std::mutex> lock(pc_mutex_);
 
-    for (auto& [clientId, context] : peer_connections_) {
-        auto signaling_state = context.peer_connection->signaling_state();
-
-        std::cout << "[STREAM] Client " << clientId
-            << " - Signaling state: " << static_cast<int>(signaling_state) << std::endl;
-
-        if (signaling_state != webrtc::PeerConnectionInterface::SignalingState::kStable) {
-            std::cout << "[STREAM] ⚠️ Client " << clientId
-                << " not in stable state, skipping for now" << std::endl;
-            continue;
+        if (peer_connections_.empty()) {
+            std::cout << "[RTC] No clients connected yet, stream ready." << std::endl;
+            return;
         }
 
-        if (context.video_track) {
-            std::cout << "[STREAM] Client " << clientId << " already has video track" << std::endl;
-            continue;
-        }
+        for (auto& [clientId, ctx] : peer_connections_) {
+            if (!ctx.peer_connection) continue;
 
-        std::cout << "[STREAM] Adding track to client: " << clientId << std::endl;
-
-        webrtc::scoped_refptr<webrtc::VideoTrackInterface> video_track =
-            peer_connection_factory_->CreateVideoTrack(global_video_source_, "video_label");
-
-        context.video_track = video_track;
-
-        auto res = context.peer_connection->AddTrack(video_track, { STREAM_ID });
-
-        if (res.ok()) {
-            std::cout << "[STREAM] ✓ Track added, initiating renegotiation..." << std::endl;
-
-            webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
-            options.offer_to_receive_video = false;
-            options.offer_to_receive_audio = false;
-
-            context.peer_connection->CreateOffer(
-                new webrtc::RefCountedObject<CreateSessionDescriptionObserver>(
-                    clientId, context.callback, context.peer_connection.get()),
-                options
-            );
-        }
-        else {
-            std::cerr << "[STREAM] ✗ AddTrack failed for " << clientId
-                << ": " << res.error().message() << std::endl;
+            Target t;
+            t.clientId = clientId;
+            t.pc = ctx.peer_connection;
+            t.cb = ctx.callback;
+            t.has_track = (ctx.video_track != nullptr);
+            targets.push_back(std::move(t));
         }
     }
 
-    std::cout << "[STREAM] Stream start complete\n" << std::endl;
+
+    for (auto& t : targets) {
+        if (!t.pc) continue;
+
+        auto state = t.pc->signaling_state();
+        if (state != webrtc::PeerConnectionInterface::SignalingState::kStable) {
+            std::cout << "[RTC] Skip " << t.clientId
+                << " because signaling_state != stable (" << static_cast<int>(state) << ")"
+                << std::endl;
+            continue;
+        }
+
+        if (!t.has_track) {
+            auto video_track =
+                peer_connection_factory_->CreateVideoTrack(global_video_source_, "video_label");
+
+            auto sender_res = t.pc->AddTrack(video_track, { STREAM_ID });
+            if (!sender_res.ok()) {
+                std::cerr << "[RTC] AddTrack failed for " << t.clientId
+                    << ": " << sender_res.error().message() << std::endl;
+                continue;
+            }
+
+
+            {
+                std::lock_guard<std::mutex> lock(pc_mutex_);
+                auto it = peer_connections_.find(t.clientId);
+                if (it != peer_connections_.end() && !it->second.video_track) {
+                    it->second.video_track = video_track;
+                }
+            }
+        }
+
+        webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
+        options.offer_to_receive_audio = false;
+        options.offer_to_receive_video = false;
+
+        t.pc->CreateOffer(
+            new webrtc::RefCountedObject<CreateSessionDescriptionObserver>(t.clientId, t.cb, t.pc.get()),
+            options
+        );
+    }
+
+    std::cout << "[RTC] Global stream negotiation started." << std::endl;
 }
 
 void RTCManager::handleIceCandidate(const std::string& clientId,
     const std::string& candidate,
     const std::string& sdpMid,
     int sdpMLineIndex) {
-    std::lock_guard<std::mutex> lock(pc_mutex_);
-    auto it = peer_connections_.find(clientId);
-    if (it == peer_connections_.end()) return;
 
-    auto& ctx = it->second;
+    webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc;
 
-    // ✅ Если remote description ещё не поставлен — буферим кандидаты
-    if (!ctx.remote_description_set) {
-        ctx.pending_ice.push_back({ candidate, sdpMid, sdpMLineIndex });
-        std::cout << "[ICE] Buffered candidate for " << clientId
-            << " (pending=" << ctx.pending_ice.size() << ")" << std::endl;
-        return;
+    {
+        std::lock_guard<std::mutex> lock(pc_mutex_);
+        auto it = peer_connections_.find(clientId);
+        if (it == peer_connections_.end()) return;
+
+        auto& ctx = it->second;
+
+
+        if (!ctx.remote_description_set) {
+            ctx.pending_ice.push_back({ candidate, sdpMid, sdpMLineIndex });
+            std::cout << "[ICE] Buffered candidate for " << clientId
+                << " (pending=" << ctx.pending_ice.size() << ")" << std::endl;
+            return;
+        }
+
+        pc = ctx.peer_connection;
     }
+
 
     webrtc::SdpParseError error;
     std::unique_ptr<webrtc::IceCandidateInterface> cand(
@@ -707,7 +757,7 @@ void RTCManager::handleIceCandidate(const std::string& clientId,
         return;
     }
 
-    if (!ctx.peer_connection->AddIceCandidate(cand.get())) {
+    if (!pc->AddIceCandidate(cand.get())) {
         std::cerr << "[ERR] AddIceCandidate failed for " << clientId << std::endl;
     }
     else {
@@ -725,7 +775,6 @@ void RTCManager::closePeerConnection(const std::string& clientId) {
 
     auto& ctx = it->second;
 
-    // 1) DataChannel observer: обязательно Unregister перед delete
     if (ctx.data_channel) {
         if (ctx.data_channel_observer) {
             ctx.data_channel->UnregisterObserver();
@@ -736,17 +785,15 @@ void RTCManager::closePeerConnection(const std::string& clientId) {
         ctx.data_channel = nullptr;
     }
     else {
-        // На всякий случай, если dc уже null, но observer ещё висит
+
         if (ctx.data_channel_observer) {
             delete ctx.data_channel_observer;
             ctx.data_channel_observer = nullptr;
         }
     }
 
-    // 2) Video track reference
     ctx.video_track = nullptr;
 
-    // 3) Close PeerConnection
     if (ctx.peer_connection) {
         ctx.peer_connection->Close();
         ctx.peer_connection = nullptr;
@@ -771,7 +818,6 @@ void RTCManager::sendPlaybackPosition(const std::string& clientId, double curren
     }
 }
 
-// FileVideoTrackSource Implementation
 RTCManager::FileVideoTrackSource::FileVideoTrackSource(const std::string& file_path, bool loop)
     : file_path_(file_path), should_loop_(loop) {
     std::cout << "[VIDEO] FileVideoTrackSource created for: " << file_path << std::endl;
@@ -978,39 +1024,54 @@ void RTCManager::FileVideoTrackSource::CaptureLoop() {
     std::cout << "[VIDEO] ✓ Cleanup complete\n" << std::endl;
 }
 
-void RTCManager::flushPendingIce(const std::string& clientId) {
-    auto it = peer_connections_.find(clientId);
-    if (it == peer_connections_.end()) return;
-    auto& ctx = it->second;
-    if (!ctx.remote_description_set) return;
-    if (ctx.pending_ice.empty()) return;
+void RTCManager::flushPendingIce(
+    const std::string& clientId,
+    const webrtc::scoped_refptr<webrtc::PeerConnectionInterface>& pc,
+    std::vector<PendingIceCandidate>&& pending
+) {
+    if (!pc) return;
+    if (pending.empty()) return;
 
-    std::cout << "[ICE] Flushing " << ctx.pending_ice.size()
-              << " buffered candidate(s) for " << clientId << std::endl;
+    std::cout << "[ICE] Flushing " << pending.size()
+        << " buffered candidate(s) for " << clientId << std::endl;
 
-    for (const auto& p : ctx.pending_ice) {
+    for (const auto& p : pending) {
         webrtc::SdpParseError error;
         std::unique_ptr<webrtc::IceCandidateInterface> cand(
             webrtc::CreateIceCandidate(p.sdp_mid, p.sdp_mline_index, p.candidate, &error));
+
         if (!cand) {
             std::cerr << "[ERR] Failed to parse buffered ICE: " << error.description << std::endl;
             continue;
         }
-        if (!ctx.peer_connection->AddIceCandidate(cand.get())) {
+
+        if (!pc->AddIceCandidate(cand.get())) {
             std::cerr << "[ERR] AddIceCandidate (buffered) failed for " << clientId << std::endl;
         }
     }
-    ctx.pending_ice.clear();
 }
 
 void RTCManager::onRemoteOfferSet(const std::string& clientId) {
-    std::lock_guard<std::mutex> lock(pc_mutex_);
-    auto it = peer_connections_.find(clientId);
-    if (it == peer_connections_.end()) return;
+    webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc;
+    OnMessageCallback cb;
+    std::vector<PendingIceCandidate> pending;
 
-    auto& ctx = it->second;
-    ctx.remote_description_set = true;
-    flushPendingIce(clientId);
+    {
+        std::lock_guard<std::mutex> lock(pc_mutex_);
+        auto it = peer_connections_.find(clientId);
+        if (it == peer_connections_.end()) return;
+
+        auto& ctx = it->second;
+        ctx.remote_description_set = true;
+
+        pc = ctx.peer_connection;
+        cb = ctx.callback;
+
+        pending = std::move(ctx.pending_ice);
+        ctx.pending_ice.clear();
+    }
+
+    flushPendingIce(clientId, pc, std::move(pending));
 
     std::cout << "[RTC] Remote offer set. Creating answer for " << clientId << std::endl;
 
@@ -1018,16 +1079,29 @@ void RTCManager::onRemoteOfferSet(const std::string& clientId) {
     options.offer_to_receive_audio = false;
     options.offer_to_receive_video = false;
 
-    ctx.peer_connection->CreateAnswer(
-        new webrtc::RefCountedObject<CreateSessionDescriptionObserver>(clientId, ctx.callback, ctx.peer_connection.get()),
-        options);
+    pc->CreateAnswer(
+        new webrtc::RefCountedObject<CreateSessionDescriptionObserver>(clientId, cb, pc.get()),
+        options
+    );
 }
 
 void RTCManager::onRemoteAnswerSet(const std::string& clientId) {
-    std::lock_guard<std::mutex> lock(pc_mutex_);
-    auto it = peer_connections_.find(clientId);
-    if (it == peer_connections_.end()) return;
+    webrtc::scoped_refptr<webrtc::PeerConnectionInterface> pc;
+    std::vector<PendingIceCandidate> pending;
 
-    it->second.remote_description_set = true;
-    flushPendingIce(clientId);
+    {
+        std::lock_guard<std::mutex> lock(pc_mutex_);
+        auto it = peer_connections_.find(clientId);
+        if (it == peer_connections_.end()) return;
+
+        auto& ctx = it->second;
+        ctx.remote_description_set = true;
+
+        pc = ctx.peer_connection;
+
+        pending = std::move(ctx.pending_ice);
+        ctx.pending_ice.clear();
+    }
+
+    flushPendingIce(clientId, pc, std::move(pending));
 }

@@ -49,9 +49,17 @@ public:
     bool isStreaming() const;
 
 private:
+    struct PendingIceCandidate; // <-- добавить forward
+
     void onRemoteOfferSet(const std::string& clientId);
     void onRemoteAnswerSet(const std::string& clientId);
-    void flushPendingIce(const std::string& clientId);
+
+    // NEW: flushPendingIce больше не читает peer_connections_
+    void flushPendingIce(
+        const std::string& clientId,
+        const webrtc::scoped_refptr<webrtc::PeerConnectionInterface>& pc,
+        std::vector<PendingIceCandidate>&& pending
+    );
 
 class PeerConnectionObserver;
     class CreateSessionDescriptionObserver;
@@ -98,6 +106,7 @@ class PeerConnectionObserver;
         webrtc::scoped_refptr<webrtc::VideoTrackInterface> video_track;
         DataChannelObserver* data_channel_observer = nullptr;
         OnMessageCallback callback;
+        bool needs_offer = false;
             bool remote_description_set = false;
         std::vector<PendingIceCandidate> pending_ice;
 };
@@ -110,4 +119,5 @@ class PeerConnectionObserver;
 
     std::unique_ptr<webrtc::Thread> signaling_thread_;
     std::unique_ptr<webrtc::Thread> worker_thread_;
+    std::unique_ptr<webrtc::Thread> network_thread_;
 };

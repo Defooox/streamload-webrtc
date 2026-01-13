@@ -20,10 +20,10 @@ using tcp = net::ip::tcp;
 
 class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
 public:
-    // Signaling JSON должен быть маленький; лимит защищает от memory DoS
-    static constexpr std::size_t kMaxIncomingMessageBytes = 64 * 1024; // 64 KB
+  
+    static constexpr std::size_t kMaxIncomingMessageBytes = 64 * 1024;
 
-    // Ограничиваем исходящую очередь, чтобы медленный клиент не раздувал RAM
+   
     static constexpr std::size_t kMaxWriteQueue = 256;
 
     WebSocketSession(tcp::socket socket,
