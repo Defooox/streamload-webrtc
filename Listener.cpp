@@ -1,57 +1,97 @@
 #include "Listener.h"
 #include "WebSocketSession.h"
 #include "SharedState.h"
+
+#include <boost/beast/websocket.hpp>
 #include <iostream>
 
-namespace http = boost::beast::http;
+namespace websocket = boost::beast::websocket;
 
-Listener::Listener(
-    net::io_context& ioc,
+Listener::Listener(net::io_context& ioc,
     tcp::endpoint endpoint,
-    std::shared_ptr<SharedState> const& state)
-    : ioc_(ioc), acceptor_(net::make_strand(ioc)), state_(state)
+    std::shared_ptr<SharedState> state)
+    : ioc_(ioc)
+    , acceptor_(net::make_strand(ioc))
+    , state_(std::move(state))
 {
-    acceptor_.open(endpoint.protocol());
-    acceptor_.set_option(net::socket_base::reuse_address(true));
-    acceptor_.bind(endpoint);
-    acceptor_.listen(net::socket_base::max_listen_connections);
+    beast::error_code ec;
+
+    acceptor_.open(endpoint.protocol(), ec);
+    if (ec) throw beast::system_error(ec);
+
+    acceptor_.set_option(net::socket_base::reuse_address(true), ec);
+    if (ec) throw beast::system_error(ec);
+
+    acceptor_.bind(endpoint, ec);
+    if (ec) throw beast::system_error(ec);
+
+    acceptor_.listen(net::socket_base::max_listen_connections, ec);
+    if (ec) throw beast::system_error(ec);
 }
 
 void Listener::run() {
     do_accept();
 }
 
-void Listener::fail(beast::error_code ec, char const* what) {
-    if (ec == net::error::operation_aborted)
-        return;
-    std::cerr << what << ": " << ec.message() << "\n";
-}
-
 void Listener::do_accept() {
     acceptor_.async_accept(
         net::make_strand(ioc_),
-        beast::bind_front_handler(
-            &Listener::on_accept,
-            shared_from_this()));
+        beast::bind_front_handler(&Listener::on_accept, shared_from_this())
+    );
 }
 
 void Listener::on_accept(beast::error_code ec, tcp::socket socket) {
-    if (ec)
-        return fail(ec, "accept");
+    if (ec) {
+        std::cerr << "[WS] accept error: " << ec.message() << "\n";
+        do_accept();
+        return;
+    }
 
-    auto stream = std::make_shared<beast::tcp_stream>(std::move(socket));
+    // —разу принимаем следующий коннект (сервер не блокируетс€ на этом клиенте)
+    do_accept();
+
+    // Ќам нужно прочитать HTTP request, чтобы пон€ть upgrade ли это
+    auto sp_socket = std::make_shared<tcp::socket>(std::move(socket));
     auto buffer = std::make_shared<beast::flat_buffer>();
     auto req = std::make_shared<http::request<http::string_body>>();
 
-    http::async_read(*stream, *buffer, *req,
-        [this, stream, buffer, req](beast::error_code ec, std::size_t) {
-            if (ec)
-                return fail(ec, "read_http");
-
-            if (websocket::is_upgrade(*req)) {
-                std::make_shared<WebSocketSession>(stream->release_socket(), state_)->run(*req);
+    http::async_read(
+        *sp_socket,
+        *buffer,
+        *req,
+        [this, sp_socket, buffer, req](beast::error_code read_ec, std::size_t) mutable {
+            if (read_ec) {
+                std::cerr << "[WS] http read error: " << read_ec.message() << "\n";
+                beast::error_code ignore;
+                sp_socket->shutdown(tcp::socket::shutdown_both, ignore);
+                sp_socket->close(ignore);
+                return;
             }
-        });
 
-    do_accept();
+            if (!websocket::is_upgrade(*req)) {
+                // Ќ≈ WebSocket upgrade Ч отвечаем 426 и закрываем соединение
+                http::response<http::string_body> res{ http::status::upgrade_required, req->version() };
+                res.set(http::field::server, "RTCServer");
+                res.set(http::field::content_type, "text/plain; charset=utf-8");
+                res.keep_alive(false);
+                res.body() = "Upgrade Required: use WebSocket endpoint.";
+                res.prepare_payload();
+
+                http::async_write(
+                    *sp_socket,
+                    res,
+                    [sp_socket](beast::error_code, std::size_t) {
+                        beast::error_code ignore;
+                        sp_socket->shutdown(tcp::socket::shutdown_both, ignore);
+                        sp_socket->close(ignore);
+                    }
+                );
+                return;
+            }
+
+            // Ёто WebSocket upgrade Ч передаЄм сокет в WebSocketSession
+            auto session = std::make_shared<WebSocketSession>(std::move(*sp_socket), state_, ioc_);
+            session->run(std::move(*req));
+        }
+    );
 }

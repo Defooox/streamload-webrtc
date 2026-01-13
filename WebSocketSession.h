@@ -1,54 +1,63 @@
 #pragma once
 
+#include <boost/asio.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
-#include <boost/asio/strand.hpp>
+#include <boost/beast/http.hpp>
+
+#include <deque>
 #include <memory>
 #include <string>
-#include <vector>
-#include <queue>
-
-namespace beast = boost::beast;
-namespace http = beast::http;
-namespace websocket = beast::websocket;
-namespace net = boost::asio;
-using tcp = boost::asio::ip::tcp;
 
 class SharedState;
 
-class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
-    websocket::stream<beast::tcp_stream> ws_;
-    beast::flat_buffer buffer_;
-    std::shared_ptr<SharedState> state_;
-    std::queue<std::shared_ptr<std::string const>> write_queue_;
+namespace net = boost::asio;
+namespace beast = boost::beast;
+namespace websocket = beast::websocket;
+namespace http = beast::http;
 
-    void fail(beast::error_code ec, char const* what);
+using tcp = net::ip::tcp;
+
+class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
+public:
+    // Signaling JSON должен быть маленький; лимит защищает от memory DoS
+    static constexpr std::size_t kMaxIncomingMessageBytes = 64 * 1024; // 64 KB
+
+    // Ограничиваем исходящую очередь, чтобы медленный клиент не раздувал RAM
+    static constexpr std::size_t kMaxWriteQueue = 256;
+
+    WebSocketSession(tcp::socket socket,
+        std::shared_ptr<SharedState> state,
+        net::io_context& ioc);
+
+    void run(http::request<http::string_body> req);
+
+    void send(std::shared_ptr<std::string const> const& msg);
+    void send(std::string msg);
+
+    void close();
+
+private:
     void on_accept(beast::error_code ec);
+
     void do_read();
     void on_read(beast::error_code ec, std::size_t bytes_transferred);
+
+    void do_write();
     void on_write(beast::error_code ec, std::size_t bytes_transferred);
 
-public:
-    WebSocketSession(tcp::socket&& socket, std::shared_ptr<SharedState> const& state);
-    ~WebSocketSession();
+    void do_close(websocket::close_reason reason);
+    void on_close(beast::error_code ec);
+    void leave_state_once();
 
-    template<class Body, class Allocator>
-    void run(http::request<Body, http::basic_fields<Allocator>> req);
+private:
+    websocket::stream<tcp::socket> ws_;
+    std::shared_ptr<SharedState> state_;
 
-    void send(std::shared_ptr<std::string const> const& ss);
+    beast::flat_buffer buffer_;
+
+    net::strand<net::io_context::executor_type> strand_;
+    std::deque<std::shared_ptr<std::string const>> write_queue_;
+
+    bool closing_{ false };
 };
-
-template<class Body, class Allocator>
-void WebSocketSession::run(http::request<Body, http::basic_fields<Allocator>> req) {
-    ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
-    ws_.set_option(websocket::stream_base::decorator(
-        [](websocket::response_type& res) {
-            res.set(http::field::server, std::string(BOOST_BEAST_VERSION_STRING) + " websocket-server-async");
-        }));
-
-    ws_.async_accept(
-        req,
-        beast::bind_front_handler(
-            &WebSocketSession::on_accept,
-            shared_from_this()));
-}

@@ -19,7 +19,7 @@ int main() {
         const int threads = 4;
 
  
-        std::cout << "WebRTC Sync Streaming Server\n";
+
         std::cout << "WebSocket (signaling): ws://" << address << ":" << ws_port << "\n";
         std::cout << "HTTP (UI & upload):    http://" << address << ":" << http_port << "\n";
 
